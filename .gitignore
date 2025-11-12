@@ -1,0 +1,41 @@
+# فایل‌های احراز هویت
+credentials.json
+token.pickle
+*.json
+!config.json
+!package.json
+
+# خروجی‌ها
+audio_outputs/
+visual_outputs/
+*.mp3
+*.wav
+*.png
+*.jpg
+
+# نوت‌بوک‌ها (اختیاری - می‌توانید commit کنید)
+*.ipynb_checkpoints/
+alerts_data.json
+last_check.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
