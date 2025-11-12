@@ -1,0 +1,12 @@
+{
+  "gmail_credentials": "credentials.json",
+  "gmail_token": "token.pickle",
+  "openai_api_key": "",
+  "llm_model": "gpt-4",
+  "use_openai": true,
+  "audio_output_dir": "audio_outputs",
+  "visual_output_dir": "visual_outputs",
+  "tts_language": "fa",
+  "notebook_path": "google_alerts_summary.ipynb",
+  "last_check_file": "last_check.json"
+}
