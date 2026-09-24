@@ -118,7 +118,8 @@ def trades_for(c, rule, days, a):
                 fund = L * c.funding_sum(et, c.t[xi]) / entry
                 ret = max(-1.0, L * (entry - xp) / entry - a.fee * L * (1 + xp / entry) + fund)
             out.append({"rule": rule, "sl": sl, "tp": tp, "ret": ret, "fund": fund, "exit": why,
-                        "t0": c.t0, "pump": pump24(c), "entry_h": (et - c.t0) / HOUR})
+                        "t0": c.t0, "pump": pump24(c), "entry_h": (et - c.t0) / HOUR,
+                        "sym": c.symbol, "et": et, "xt": c.t[xi]})
     return out
 
 
