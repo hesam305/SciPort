@@ -41,3 +41,18 @@ python analyze_10d.py new_listings_binance-archive.zip --days 10
 ```
 
 Parameters are ranked on the older listings (train) and checked on the newer ones (test). This guards against overfitting. The full grid is saved to `grid_results.csv`.
+
+## 3. Filters and account simulation
+
+```bash
+python analyze_filters.py new_listings_binance-archive.zip     # volume, 24h change, funding and BTC-trend filters
+python simulate_portfolio.py new_listings_binance-archive.zip --capital 200 --rule filtered
+```
+
+## 4. Alert bot
+
+`signal_bot.py` watches new Binance listings and sends an alert when the rule triggers. It only sends alerts and never places orders. Alerts go to Telegram if the env vars `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are set; otherwise they are printed to the console. Binance blocks US servers, including GitHub Actions, so run the bot on your own computer (with a VPN from Iran) or on a server outside the US:
+
+```bash
+python signal_bot.py --loop 900
+```

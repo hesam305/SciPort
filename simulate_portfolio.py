@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Account simulation for the rule found in analyze_10d.py:
-  first-24h pump < 20%  ->  short 24h after listing, 2x, SL 45%, close by day 10.
+  first-24h pump < 20%  ->  short 24h after listing, 2x, SL 45%, close by day 10,
+  optionally filtered to (24h change < -8% OR funding < 0 at entry).
 
 Positions overlap in time; each new trade uses a fixed share of current equity
 as margin, with a cap on simultaneous positions. Profits are compounded.
@@ -65,6 +66,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("data")
     ap.add_argument("--capital", type=float, default=200)
+    ap.add_argument("--rule", choices=["base", "filtered"], default="filtered",
+                    help="filtered = base rule plus (24h change < -8%% OR funding < 0 at entry)")
     ap.add_argument("--extra-slippage", type=float, default=0.0,
                     help="extra cost per side on top of fees (e.g. 0.005 = 0.5%%)")
     a = ap.parse_args()
@@ -73,10 +76,21 @@ def main():
     coins = [c for c in coins if c.t[-1] >= c.t0 + 10 * bt.DAY - 5 * bt.MIN]
     cfg = SimpleNamespace(leverage=2, fee=0.0005 + a.extra_slippage, slippage=0.002 + a.extra_slippage)
     a10.SLS, a10.TPS = [0.45], [None]
-    trades = [t for c in coins if a10.pump24(c) < 0.2
-              for t in a10.trades_for(c, ("delay", 24, None), 10, cfg)]
+    import analyze_filters as af
+    for c in coins:
+        c.qv = []
+
+    def keep(c):
+        if a10.pump24(c) >= 0.2:
+            return False
+        if a.rule == "base":
+            return True
+        f = af.features(c, None)
+        return f["chg24"] < -0.08 or f["funding"] < 0
+
+    trades = [t for c in coins if keep(c) for t in a10.trades_for(c, ("delay", 24, None), 10, cfg)]
     span_m = (max(t["xt"] for t in trades) - min(t["et"] for t in trades)) / (30.4 * bt.DAY)
-    print(f"{len(trades)} signals over {span_m:.1f} months, starting capital ${a.capital:g}, "
+    print(f"rule={a.rule}: {len(trades)} signals over {span_m:.1f} months, starting capital ${a.capital:g}, "
           f"extra cost/side {a.extra_slippage:.2%}\n")
 
     print(f"{'margin/trade':>12} {'max pos':>7} | {'final $':>9} {'avg month':>9} {'median':>7} "
