@@ -34,4 +34,10 @@ The report has four parts:
 2. **Funding:** how much a short pays or receives while holding.
 3. **Stop loss:** how often a secondary pump of 25–30% or more happens, plus the full SL/TP/hold grid.
 
+For a focused look at the first 10 days, where every trade must close by day 10 and results are split by the size of the first-24h pump, run:
+
+```bash
+python analyze_10d.py new_listings_binance-archive.zip --days 10
+```
+
 Parameters are ranked on the older listings (train) and checked on the newer ones (test). This guards against overfitting. The full grid is saved to `grid_results.csv`.
