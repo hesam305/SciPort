@@ -1,0 +1,70 @@
+name: Collect listings data and backtest
+
+on:
+  workflow_dispatch:
+    inputs:
+      exchange:
+        description: "binance-archive | binance | bybit | gate"
+        default: binance-archive
+      months:
+        default: "18"
+  push:
+    branches: [claude/continue-chat-ldo6r9]
+    paths:
+      - collect_new_listings.py
+      - backtest.py
+      - .github/workflows/collect.yml
+
+permissions:
+  contents: write
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      EXCHANGE: ${{ inputs.exchange || 'binance-archive' }}
+      MONTHS: ${{ inputs.months || '18' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Probe exchange APIs from the runner
+        continue-on-error: true
+        run: |
+          for u in https://fapi.binance.com/fapi/v1/ping https://api.binance.com/api/v3/ping \
+                   "https://api.bybit.com/v5/market/time" https://api.gateio.ws/api/v4/spot/time \
+                   https://www.okx.com/api/v5/public/time https://api.telegram.org; do
+            echo "$u -> $(curl -s -o /dev/null -w '%{http_code}' -m 15 "$u")"
+          done
+
+      - name: Collect data
+        run: python collect_new_listings.py --exchange "$EXCHANGE" --months "$MONTHS" --workers 8
+
+      - name: Backtest
+        run: python backtest.py "new_listings_${EXCHANGE}.zip" --leverage 2 | tee backtest_report.txt
+
+      - name: Publish results to data-${{ env.EXCHANGE }} branch
+        run: |
+          mkdir out
+          mv backtest_report.txt grid_results.csv out/
+          split -b 90m -d "new_listings_${EXCHANGE}.zip" "out/new_listings_${EXCHANGE}.zip.part"
+          cd out
+          git init -q -b "data-${EXCHANGE}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -qm "Data + backtest from run ${GITHUB_RUN_ID}"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:data-${EXCHANGE}"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: listings-${{ env.EXCHANGE }}
+          path: |
+            new_listings_*.zip
+            out/backtest_report.txt
+          if-no-files-found: ignore

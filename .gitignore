@@ -1,0 +1,5 @@
+data/
+*.zip
+grid_results.csv
+__pycache__/
+signal_state.json
