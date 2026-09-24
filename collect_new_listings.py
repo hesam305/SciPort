@@ -9,6 +9,7 @@ Usage:
     python collect_new_listings.py --exchange binance
     python collect_new_listings.py --exchange bybit --months 12
     python collect_new_listings.py --exchange gate
+    python collect_new_listings.py --exchange binance-archive --workers 8
 
 Output:
     data/<exchange>/listings.csv
@@ -26,6 +27,8 @@ Funding CSV columns: time_ms,rate
 
 import argparse
 import csv
+import io
+import re
 import json
 import os
 import sys
@@ -34,6 +37,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 
 MIN = 60_000
 HOUR = 60 * MIN
@@ -66,6 +71,26 @@ def http_get(url, params=None, retries=6):
                 raise RuntimeError(f"HTTP {e.code}: {body}")
             print(f"  HTTP {e.code}, retry in {delay}s")
         except (urllib.error.URLError, TimeoutError, ConnectionError, json.JSONDecodeError) as e:
+            print(f"  network error ({e}), retry in {delay}s")
+        time.sleep(delay)
+        delay = min(delay * 2, 60)
+    raise RuntimeError(f"giving up on {url}")
+
+
+def http_raw(url, retries=6, missing_ok=False):
+    delay = 2
+    for attempt in range(retries):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "listing-research/1.0"})
+            with urllib.request.urlopen(req, timeout=60) as r:
+                return r.read()
+        except urllib.error.HTTPError as e:
+            if e.code == 404 and missing_ok:
+                return None
+            if 400 <= e.code < 500 and e.code not in (429, 418):
+                raise RuntimeError(f"HTTP {e.code}: {url}")
+            print(f"  HTTP {e.code}, retry in {delay}s")
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
             print(f"  network error ({e}), retry in {delay}s")
         time.sleep(delay)
         delay = min(delay * 2, 60)
@@ -218,7 +243,103 @@ class Gate:
         return [[t, rows[t]] for t in sorted(rows) if start <= t < end]
 
 
-EXCHANGES = {"binance": Binance, "bybit": Bybit, "gate": Gate}
+# ---------------------------------------------- Binance public archive ----
+
+class BinanceArchive:
+    """data.binance.vision: bulk files, not geo-blocked like fapi.binance.com.
+
+    Includes delisted symbols (no survivorship bias). Listing time = first
+    5m candle in the archive. Funding comes from monthly files only, so
+    listings whose window reaches into the current month are skipped.
+    """
+    FILES = "https://data.binance.vision/"
+    S3 = "https://s3-ap-northeast-1.amazonaws.com/data.binance.vision"
+    KL = "data/futures/um/{freq}/klines/{sym}/{iv}/{sym}-{iv}-{date}.zip"
+    FR = "data/futures/um/monthly/fundingRate/{sym}/{sym}-fundingRate-{date}.zip"
+
+    def _s3(self, prefix, delimiter=None, max_keys=1000, marker=""):
+        p = {"prefix": prefix, "max-keys": max_keys}
+        if delimiter:
+            p["delimiter"] = delimiter
+        if marker:
+            p["marker"] = marker
+        return http_raw(self.S3 + "?" + urllib.parse.urlencode(p)).decode()
+
+    def _csv_zip(self, path):
+        raw = http_raw(self.FILES + path, missing_ok=True)
+        if raw is None:
+            return []
+        with zipfile.ZipFile(io.BytesIO(raw)) as z:
+            text = z.read(z.namelist()[0]).decode()
+        rows = list(csv.reader(io.StringIO(text)))
+        return [r for r in rows if r and r[0][:1].isdigit()]  # drop header if any
+
+    def listings(self):
+        syms, marker = [], ""
+        while True:
+            xml = self._s3("data/futures/um/daily/klines/", "/", marker=marker)
+            got = re.findall(r"<Prefix>data/futures/um/daily/klines/([^/<]+)/</Prefix>", xml)
+            syms += got
+            if "<IsTruncated>true</IsTruncated>" not in xml or not got:
+                break
+            marker = f"data/futures/um/daily/klines/{got[-1]}/"
+        syms = [s for s in syms if s.endswith("USDT") and "_" not in s]
+        print(f"  {len(syms)} USDT perpetual symbols in archive, finding listing dates ...")
+
+        def first(sym):
+            xml = self._s3(f"data/futures/um/daily/klines/{sym}/5m/", max_keys=1)
+            m = re.search(r"-5m-(\d{4}-\d{2}-\d{2})\.zip<", xml)
+            if not m:
+                return None
+            rows = self._csv_zip(self.KL.format(freq="daily", sym=sym, iv="5m", date=m.group(1)))
+            if not rows:
+                return None
+            return {"symbol": sym, "listed_ms": int(rows[0][0]), "status": ""}
+
+        with ThreadPoolExecutor(16) as ex:
+            out = [r for r in ex.map(first, syms) if r]
+        month_start = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        cutoff = int(month_start.timestamp() * 1000) - 14 * DAY
+        return [r for r in out if r["listed_ms"] < cutoff]
+
+    @staticmethod
+    def _days(start, end):
+        d = datetime.fromtimestamp(start / 1000, timezone.utc).date()
+        last = datetime.fromtimestamp((end - 1) / 1000, timezone.utc).date()
+        while d <= last:
+            yield d
+            d += timedelta(days=1)
+
+    def _months(self, start, end):
+        return sorted({d.strftime("%Y-%m") for d in self._days(start, end)})
+
+    def klines(self, symbol, interval, start, end):
+        if interval == "5m":
+            files = [self.KL.format(freq="daily", sym=symbol, iv="5m", date=d.isoformat())
+                     for d in self._days(start, end)]
+        else:
+            files = [self.KL.format(freq="monthly", sym=symbol, iv=interval, date=m)
+                     for m in self._months(start, end)]
+        rows = {}
+        for f in files:
+            for k in self._csv_zip(f):
+                t = int(k[0])
+                if start <= t < end:
+                    rows[t] = [t, k[1], k[2], k[3], k[4], k[5], k[7]]
+        return [rows[t] for t in sorted(rows)]
+
+    def funding(self, symbol, start, end):
+        rows = []
+        for m in self._months(start, end):
+            for r in self._csv_zip(self.FR.format(sym=symbol, date=m)):
+                t = int(r[0])
+                if start <= t < end:
+                    rows.append([t, r[-1]])
+        rows.sort()
+        return rows
+
+
+EXCHANGES = {"binance": Binance, "binance-archive": BinanceArchive, "bybit": Bybit, "gate": Gate}
 
 
 # ---------------------------------------------------------------- main ----
@@ -240,6 +361,8 @@ def main():
     ap.add_argument("--days-1h", type=int, default=60, help="days of 1h candles after listing")
     ap.add_argument("--out", default="data")
     ap.add_argument("--no-zip", action="store_true")
+    ap.add_argument("--workers", type=int, default=1,
+                    help="symbols downloaded in parallel (use ~8 for binance-archive)")
     args = ap.parse_args()
 
     ex = EXCHANGES[args.exchange]()
@@ -259,7 +382,8 @@ def main():
     print(f"  {len(listings)} USDT perpetuals listed in the last {args.months:g} months")
 
     failed = []
-    for i, l in enumerate(listings, 1):
+
+    def process(i, l):
         sym, t0 = l["symbol"], l["listed_ms"]
         d = os.path.join(root, sym)
         os.makedirs(d, exist_ok=True)
@@ -270,19 +394,23 @@ def main():
         ]
         todo = [j for j in jobs if not os.path.exists(os.path.join(d, j[0]))]
         if not todo:
-            continue
-        print(f"[{i}/{len(listings)}] {sym}  listed {time.strftime('%Y-%m-%d', time.gmtime(t0 / 1000))}")
+            return
+        msg = [f"[{i}/{len(listings)}] {sym}  listed {time.strftime('%Y-%m-%d', time.gmtime(t0 / 1000))}"]
         for name, fn, kind in todo:
             try:
                 rows = fn()
-            except RuntimeError as e:
-                print(f"  {name}: {e}")
+            except Exception as e:  # keep other symbols going; re-run retries
+                msg.append(f"  {name}: {e}")
                 failed.append(f"{sym}/{name}")
                 continue
             header = (["open_time_ms", "open", "high", "low", "close", "volume", "quote_volume"]
                       if kind == "k" else ["time_ms", "rate"])
             write_csv(os.path.join(d, name), header, rows)
-            print(f"  {name}: {len(rows)} rows")
+            msg.append(f"  {name}: {len(rows)} rows")
+        print("\n".join(msg), flush=True)
+
+    with ThreadPoolExecutor(args.workers) as pool:
+        list(pool.map(lambda a: process(*a), enumerate(listings, 1)))
 
     if failed:
         print(f"\n{len(failed)} downloads failed (re-run to retry): {', '.join(failed[:10])}")

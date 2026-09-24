@@ -15,6 +15,11 @@ python collect_new_listings.py --exchange bybit
 - Covers the last 18 months of listings. For each coin it downloads 14 days of 5m candles, 60 days of 1h candles and the funding rates.
 - If the run is interrupted, run it again and it picks up where it stopped.
 - The output is `new_listings_<exchange>.zip`.
+- `binance-archive` reads the public Binance archive (`data.binance.vision`). It has no geo-block and it includes delisted coins, so there is no survivorship bias.
+
+### Or on GitHub, without your own computer
+
+The workflow `.github/workflows/collect.yml` collects the data on GitHub's servers and runs the backtest there. It starts on every push to this branch, or you can start it by hand from the **Actions** tab. The results go to the `data-<exchange>` branch: `backtest_report.txt`, `grid_results.csv`, and the data zip split into parts. To rebuild the zip, run `cat new_listings_*.zip.part* > new_listings.zip`.
 
 ## 2. Run the backtest
 
