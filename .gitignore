@@ -1,0 +1,4 @@
+data/
+*.zip
+grid_results.csv
+__pycache__/
