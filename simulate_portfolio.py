@@ -54,11 +54,18 @@ def run(trades, capital, frac, max_pos):
     months = {}
     for ts, eq in curve:
         months[month(ts)] = eq
-    keys = sorted(months)
+    y, m = map(int, min(months).split("-"))
+    last, keys = max(months), []
+    while f"{y:04d}-{m:02d}" <= last:  # include months with no closed trade
+        keys.append(f"{y:04d}-{m:02d}")
+        y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+    for k in keys:
+        months.setdefault(k, None)
     rets, prev = [], capital
     for k in keys:
-        rets.append((k, months[k] / prev - 1, months[k]))
-        prev = months[k]
+        eq = months[k] if months[k] is not None else prev
+        rets.append((k, eq / prev - 1, eq))
+        prev = eq
     return {"final": equity, "max_dd": max_dd, "taken": taken, "skipped": skipped, "months": rets}
 
 
@@ -66,8 +73,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("data")
     ap.add_argument("--capital", type=float, default=200)
-    ap.add_argument("--rule", choices=["base", "filtered"], default="filtered",
-                    help="filtered = base rule plus (24h change < -8%% OR funding < 0 at entry)")
+    ap.add_argument("--rule", choices=["base", "filtered", "filtered-atr"], default="filtered-atr",
+                    help="filtered = base rule plus (24h change < -8%% OR funding < 0 at entry); "
+                         "filtered-atr also skips coins with 15m ATR < 0.65%% of price")
     ap.add_argument("--extra-slippage", type=float, default=0.0,
                     help="extra cost per side on top of fees (e.g. 0.005 = 0.5%%)")
     a = ap.parse_args()
@@ -86,7 +94,13 @@ def main():
         if a.rule == "base":
             return True
         f = af.features(c, None)
-        return f["chg24"] < -0.08 or f["funding"] < 0
+        if not (f["chg24"] < -0.08 or f["funding"] < 0):
+            return False
+        if a.rule == "filtered-atr":
+            import analyze_indicators as ai
+            ind = ai.features_24h(c)
+            return ind is not None and ind["ATR % of price"] >= 0.65
+        return True
 
     trades = [t for c in coins if keep(c) for t in a10.trades_for(c, ("delay", 24, None), 10, cfg)]
     span_m = (max(t["xt"] for t in trades) - min(t["et"] for t in trades)) / (30.4 * bt.DAY)

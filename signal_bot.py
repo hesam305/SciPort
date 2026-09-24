@@ -6,6 +6,7 @@ Rule (from analyze_10d.py / analyze_filters.py):
   24h after listing, if
       high of first 24h < first price * 1.20             (no big pump)
   and (price at 24h < first price * 0.92  OR  funding rate < 0)
+  and ATR(14) on 15m bars of the first 24h >= 0.65% of price   (skip "dead" coins)
   -> SHORT, leverage 2, stop loss +45% above entry, close at day 10.
 
 The bot only sends alerts; it never places orders.
@@ -30,6 +31,7 @@ import urllib.request
 BASE = "https://fapi.binance.com"
 HOUR, DAY = 3_600_000, 86_400_000
 PUMP_MAX, DROP_MIN, SL, LEVERAGE, HOLD_DAYS = 0.20, -0.08, 0.45, 2, 10
+ATR_MIN_PCT = 0.65
 STATE = "signal_state.json"
 
 
@@ -67,6 +69,21 @@ def save_state(s):
     os.replace(tmp, STATE)
 
 
+def atr_pct_15m(k, n=14):
+    """ATR(14) of 15m bars built from 5m klines, as % of last close."""
+    b = []
+    for i in range(0, len(k) - len(k) % 3, 3):
+        g = k[i:i + 3]
+        b.append((max(float(x[2]) for x in g), min(float(x[3]) for x in g), float(g[-1][4])))
+    if len(b) < n + 1:
+        return 0.0
+    a, alpha = b[0][0] - b[0][1], 2 / (n + 1)
+    for j in range(1, len(b)):
+        h, l, pc = b[j][0], b[j][1], b[j - 1][2]
+        a += alpha * (max(h - l, abs(h - pc), abs(l - pc)) - a)
+    return a / b[-1][2] * 100
+
+
 def evaluate(sym, t0):
     """Returns (is_signal, info dict) using the first 24h after listing."""
     k = get("/fapi/v1/klines", symbol=sym, interval="5m", startTime=t0, endTime=t0 + DAY - 1, limit=300)
@@ -76,10 +93,13 @@ def evaluate(sym, t0):
     price = float(get("/fapi/v1/ticker/price", symbol=sym)["price"])
     funding = float(get("/fapi/v1/premiumIndex", symbol=sym)["lastFundingRate"])
     pump, chg = high / first - 1, price / first - 1
-    info = {"first": first, "price": price, "pump24": pump, "chg24": chg, "funding": funding}
-    ok = pump < PUMP_MAX and (chg < DROP_MIN or funding < 0)
+    atr = atr_pct_15m(k)
+    info = {"first": first, "price": price, "pump24": pump, "chg24": chg, "funding": funding, "atr": atr}
+    ok = pump < PUMP_MAX and (chg < DROP_MIN or funding < 0) and atr >= ATR_MIN_PCT
     if not ok:
-        info["reason"] = ("pumped" if pump >= PUMP_MAX else "no drop and funding >= 0")
+        info["reason"] = ("pumped" if pump >= PUMP_MAX else
+                          "no drop and funding >= 0" if not (chg < DROP_MIN or funding < 0) else
+                          f"low volatility (ATR {atr:.2f}%)")
     return ok, info
 
 
@@ -112,7 +132,7 @@ def run_once(state):
                     f"stop loss {d['price'] * (1 + SL):.6g} (+{SL:.0%})\n"
                     f"close by {time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime((t0 + HOLD_DAYS * DAY) / 1000))}\n"
                     f"24h: high +{d['pump24']:.1%}, now {d['chg24']:+.1%} vs first price, "
-                    f"funding {d['funding'] * 100:+.4f}%")
+                    f"funding {d['funding'] * 100:+.4f}%, ATR {d['atr']:.2f}%")
             else:
                 st["status"] = "skipped"
                 print(f"  {sym}: skip ({d.get('reason', 'signal too old')})")

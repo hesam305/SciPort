@@ -46,7 +46,8 @@ Parameters are ranked on the older listings (train) and checked on the newer one
 
 ```bash
 python analyze_filters.py new_listings_binance-archive.zip     # volume, 24h change, funding and BTC-trend filters
-python simulate_portfolio.py new_listings_binance-archive.zip --capital 200 --rule filtered
+python analyze_indicators.py new_listings_binance-archive.zip  # moving averages, RSI, Bollinger, MACD, VWAP, ATR
+python simulate_portfolio.py new_listings_binance-archive.zip --capital 200 --rule filtered-atr
 ```
 
 ## 4. Alert bot
