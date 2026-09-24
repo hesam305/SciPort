@@ -32,6 +32,15 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Probe exchange APIs from the runner
+        continue-on-error: true
+        run: |
+          for u in https://fapi.binance.com/fapi/v1/ping https://api.binance.com/api/v3/ping \
+                   "https://api.bybit.com/v5/market/time" https://api.gateio.ws/api/v4/spot/time \
+                   https://www.okx.com/api/v5/public/time https://api.telegram.org; do
+            echo "$u -> $(curl -s -o /dev/null -w '%{http_code}' -m 15 "$u")"
+          done
+
       - name: Collect data
         run: python collect_new_listings.py --exchange "$EXCHANGE" --months "$MONTHS" --workers 8
 

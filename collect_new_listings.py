@@ -388,6 +388,17 @@ def main():
                for l in listings])
     print(f"  {len(listings)} USDT perpetuals listed in the last {args.months:g} months")
 
+    # market reference: BTC 1h candles over the whole period (for trend filters)
+    btc_path = os.path.join(root, "_market", "BTCUSDT_1h.csv")
+    if not os.path.exists(btc_path):
+        os.makedirs(os.path.dirname(btc_path), exist_ok=True)
+        try:
+            rows = ex.klines("BTCUSDT", "1h", since - 30 * DAY, now)
+            write_csv(btc_path, ["open_time_ms", "open", "high", "low", "close", "volume", "quote_volume"], rows)
+            print(f"  BTCUSDT 1h: {len(rows)} rows")
+        except Exception as e:
+            print(f"  BTCUSDT 1h failed: {e}")
+
     failed = []
 
     def process(i, l):
