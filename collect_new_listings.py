@@ -266,7 +266,7 @@ class BinanceArchive:
         return http_raw(self.S3 + "?" + urllib.parse.urlencode(p)).decode()
 
     def _csv_zip(self, path):
-        raw = http_raw(self.FILES + path, missing_ok=True)
+        raw = http_raw(self.FILES + urllib.parse.quote(path), missing_ok=True)
         if raw is None:
             return []
         with zipfile.ZipFile(io.BytesIO(raw)) as z:
@@ -287,6 +287,13 @@ class BinanceArchive:
         print(f"  {len(syms)} USDT perpetual symbols in archive, finding listing dates ...")
 
         def first(sym):
+            try:
+                return _first(sym)
+            except Exception as e:  # one bad symbol shouldn't stop the run
+                print(f"  {sym}: {e}")
+                return None
+
+        def _first(sym):
             xml = self._s3(f"data/futures/um/daily/klines/{sym}/5m/", max_keys=1)
             m = re.search(r"-5m-(\d{4}-\d{2}-\d{2})\.zip<", xml)
             if not m:
