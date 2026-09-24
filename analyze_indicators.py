@@ -117,10 +117,10 @@ def sim(c, ei, days, cfg, sl):
             xi, xp, why = i, None, "liq"
             break
     if why == "liq":
-        return {"ret": -1.0, "exit": why, "t0": c.t0}
+        return {"ret": -1.0, "exit": why, "t0": c.t0, "et": et, "xt": c.t[xi]}
     fund = L * c.funding_sum(et, c.t[xi]) / entry
     ret = max(-1.0, L * (entry - xp) / entry - cfg.fee * L * (1 + xp / entry) + fund)
-    return {"ret": ret, "exit": why, "t0": c.t0, "entry_h": (et - c.t0) / HOUR}
+    return {"ret": ret, "exit": why, "t0": c.t0, "entry_h": (et - c.t0) / HOUR, "et": et, "xt": c.t[xi]}
 
 
 def summary(ts):
